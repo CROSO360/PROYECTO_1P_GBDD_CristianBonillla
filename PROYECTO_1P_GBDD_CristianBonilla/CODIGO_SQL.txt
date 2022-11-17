@@ -1,0 +1,131 @@
+
+------------------------------------------------------------------------------------------------------------------
+
+--TRIGGER
+
+CREATE FUNCTION COMPORTAMIENTO_CLIENTE() RETURNS TRIGGER AS $$
+DECLARE
+	id_cli integer;
+	CONT_MALO INTEGER;
+BEGIN
+	SELECT INTO CONT_MALO COUNT("calificacion_cliente")
+	FROM PUBLIC."calificacion-cliente" 
+	WHERE PUBLIC."calificacion-cliente".id_cliente = new.id_cliente AND "calificacion_cliente" = '1';
+	IF CONT_MALO >= 2 THEN
+        UPDATE reserva SET estado_reserva = 'CANCELADA'
+        WHERE id_reserva = new.id_reserva;
+        INSERT INTO PUBLIC."reserva" ("observacion_reserva")
+        VALUES ('RESERVA CANCELADA POR MAL COMPORTAMIENTO');
+		INSERT INTO PUBLIC."reserva_cancelada" ("id_reserva", "razon_reserva_cancelada", "fecha_cancelacion")
+		VALUES ( NEW."id_reserva", 'MAL COMPORTAMIENTO', NEW."fecha_reserva" );
+	END IF;
+	RETURN NEW;
+END $$
+LANGUAGE plpgsql;
+
+------------------------------------------------------------------------------------------------------------------
+
+
+
+--CURSOR
+
+DO $$ DECLARE
+	registro Record;	
+	cur_habitaciones_liberadas CURSOR FOR	
+	SELECT 	
+	EXTRACT(YEAR FROM fecha_liberacion) AS ano,
+	habitacion.numero_habitacion AS NUMERO_HABITACION	
+	FROM habitacion_liberada
+	INNER JOIN habitacion ON habitacion_liberada.id_habitacion = habitacion.id_habitacion;
+BEGIN
+	FOR registro IN cur_habitaciones_liberadas LOOP
+		RAISE NOTICE 'año: %, numero_habitacion: %',
+			registro.ano,
+			registro.NUMERO_HABITACION;				
+	END LOOP;	
+END $$
+LANGUAGE 'plpgsql';
+
+------------------------------------------------------------------------------------------------------------------
+
+
+--PROCEDIMIENTO ALMACENADO
+
+CREATE FUNCTION RESERVAS_ANUALES(nombre varchar, apellido varchar) 
+RETURNS TABLE(nombre varchar, apellido varchar, reservas bigint, ingresos decimal, ano double precision)
+AS
+$$
+	SELECT cliente.nombre_cliente, cliente.apellido_cliente, COUNT(reserva.id_reserva) as reservas, 
+	SUM(pago.total_pago) AS ingresos, extract(year from fecha_reserva) as ano FROM reserva
+	INNER JOIN cliente on reserva.id_cliente = cliente.id_cliente
+	INNER JOIN pago on reserva.id_reserva = pago.id_reserva
+	WHERE cliente.nombre_cliente = nombre AND cliente.apellido_cliente = apellido
+	GROUP BY ano, cliente.nombre_cliente, cliente.apellido_cliente
+$$
+LANGUAGE SQL
+
+
+--SELECT nombre,apellido,reservas,ingresos,ano from reservas_anuales('CARLOS','CHAVEZ') 
+		
+
+------------------------------------------------------------------------------------------------------------------
+
+--COUNSULTA 1
+
+--HISTORICO DE INGRESOS POR CLIENTE
+
+SELECT cliente.nombre_cliente, cliente.apellido_cliente, COUNT(reserva.id_reserva) as reservas, SUM(pago.total_pago) as total_ingresos 
+FROM pago
+INNER JOIN reserva ON pago.id_reserva = pago.id_reserva 
+INNER JOIN cliente ON reserva.id_cliente = cliente.id_cliente
+WHERE reserva.estado_reserva != 'CANCELADA' AND reserva.id_reserva = pago.id_reserva
+GROUP BY cliente.nombre_cliente, cliente.apellido_cliente 
+ORDER BY total_ingresos DESC
+
+------------------------------------------------------------------------------------------------------------------
+
+--CONSULTA 2
+
+--INGRESOS POR SERVICIOS QUE NO SON ALOJAMIENTO
+
+SELECT servicio.nombre_servicio, SUM(servicio.costo_servicio) AS ingresos 
+FROM reserva
+INNER JOIN "paquete-servicio" ON "paquete-servicio".id_paquete = reserva.id_paquete
+INNER JOIN servicio ON servicio.id_servicio = "paquete-servicio".id_servicio
+WHERE "paquete-servicio".id_servicio != 1 AND reserva.estado_reserva != 'CANCELADA'
+GROUP BY servicio.nombre_servicio 
+ORDER BY ingresos DESC
+
+------------------------------------------------------------------------------------------------------------------
+
+--CONSULTA 3
+
+--INGRESOS ANUALES POR PAQUETE
+
+SELECT extract(year from fecha_pago) as ano, paquete.nombre_paquete, SUM(pago.total_pago) AS ingresos
+FROM reserva
+INNER JOIN pago ON reserva.id_reserva = pago.id_reserva
+INNER JOIN paquete ON reserva.id_paquete = paquete.id_paquete
+GROUP BY paquete.nombre_paquete, ano
+ORDER BY ano, ingresos ASC
+
+------------------------------------------------------------------------------------------------------------------
+
+--CONSULTA
+
+--HABITACIONES MAS USADAS
+ 
+SELECT habitacion.numero_habitacion, COUNT(mantenimiento_habitacion.id_habitacion) AS usos, habitacion.caracteristica_habitacion 
+FROM mantenimiento_habitacion
+INNER JOIN habitacion ON mantenimiento_habitacion.id_habitacion = habitacion.id_habitacion
+GROUP BY habitacion.numero_habitacion, habitacion.caracteristica_habitacion
+
+------------------------------------------------------------------------------------------------------------------
+
+--REPORTE
+
+--HISTORICO DE INGRESOS ANUALES
+
+SELECT EXTRACT(year from fecha_pago) AS ano, SUM(pago.total_pago) AS ingresos, COUNT(pago.id_reserva) AS reservas
+FROM pago
+GROUP BY ano
